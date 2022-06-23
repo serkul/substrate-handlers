@@ -1,0 +1,1 @@
+banch of scripts to test handlers for subquery projects which index substrate chains
