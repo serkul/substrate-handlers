@@ -6,11 +6,9 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "author": "Anson Lau",
-  "license": "ISC",
+  "author": "serkul",
+  "license": "MIT",
   "dependencies": {
-    "@polkadot/api": "^8.6.3-12",
-    "@polkadot/util": "^1.7.1",
-    "ts-node": "^10.8.1"
+    "@polkadot/api": "^8.10.1"
   }
 }
