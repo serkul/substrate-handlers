@@ -13,6 +13,9 @@ const blockNumber = 1702399;
 // const rpcProvider = "wss://moonriver.public.blastapi.io";
 // const blockNumber = 1655170;
 
+const chainIDs = {
+  Karura: "2000",
+};
 // We must wrap everything up in an async block
 (async () => {
   // Connect to a node (this is ak public one)
@@ -62,18 +65,29 @@ const blockNumber = 1702399;
     allBlockEvents
   );
   if (xcmpExtrinsicsWithEvents.length < 1) {
-    console.log("no xcmpQueue.<events> are found");
+    transfer.warnings += " - no xcmpQueue.<events> are found";
+  } else if (xcmpExtrinsicsWithEvents.length > 2) {
+    transfer.warnings += " - more than one xcmpQueue.<events> are found";
+  } else {
+    transfer.xcmpMessageStatus = xcmpExtrinsicsWithEvents[0].status;
+    transfer.xcmpMessageHash = xcmpExtrinsicsWithEvents[0].hash;
   }
-  if (xcmpExtrinsicsWithEvents.length > 2) {
-    console.log("more than one xcmpQueue.<events> are found");
-  }
-  transfer.xcmpMessageStatus = xcmpExtrinsicsWithEvents[0].status;
-  transfer.xcmpMessageHash = xcmpExtrinsicsWithEvents[0].hash;
 
-  if (xcmpExtrinsicsWithEvents[0].status === "received") {
-    await decodeInboundXcmp(xcmpExtrinsicsWithEvents[0], apiAt, transfer);
+  switch (xcmpExtrinsicsWithEvents[0].status) {
+    case "received":
+      await decodeInboundXcmp(xcmpExtrinsicsWithEvents[0], apiAt, transfer);
+      break;
+    case "sent":
+      await decodeOutboundXcmp(
+        xcmpExtrinsicsWithEvents[0],
+        apiAt,
+        chainIDs,
+        transfer
+      );
+      break;
   }
   console.log(transfer);
+
   // console.log(
   //   xcmpExtrinsicsWithEvents[0].events.map(
   //     ({ event }) => `${event.section}.${event.method}`
@@ -127,10 +141,9 @@ function mapXcmpEventsToExtrinsics(allBlockExtrinsics, allBlockEvents) {
   // Function takes all extrinsics and events in a block
   // searches for events with "xcmpQueue" section (seems to be the most universal way to filter for xcmp events),
   // puts corresponding extrinsic and all its events in an object,
-  // and pushes this object in an array.
-  // Function returns an array containing {extrinsic, [events]} array
-  // (with as many elements as xcmpQueue.events are found in a block)
-  // and xcmp message hash(if exists) and status
+  // together with xcmp message hash and status (received, sent and unknown).
+  // This object is pushed in an array.This array is returned by the function, array contains
+  // as many elements as many xcmpQueue.events are found in a block
 
   const xcmpExtrinsicsWithEvents = [];
   let xcmpStatus = "unknown";
@@ -162,7 +175,35 @@ function mapXcmpEventsToExtrinsics(allBlockExtrinsics, allBlockEvents) {
   return xcmpExtrinsicsWithEvents;
 }
 
-function decodeOutboundXcmp() {}
+async function decodeOutboundXcmp(
+  xcmpExtrinsicWithEvents,
+  apiAt,
+  chainIDs,
+  transfer
+) {
+  transfer.fromParachainId = (
+    await apiAt.query.parachainInfo.parachainId()
+  ).toString();
+  if (transfer.fromParachainId === chainIDs.Karura) {
+    xcmpExtrinsicWithEvents.events.forEach(({ event }) => {
+      if (
+        event.section == "xTokens" &&
+        event.method == "TransferredMultiAssets"
+      ) {
+        const [account, otherReserve, amount, extra] = event.data.toJSON(); //ts as any
+        // console.log(extra.interior.x2[1].accountKey20.key);
+        transfer.amount = amount.fun.fungible;
+        transfer.toAddress = extra.interior.x2[1].accountKey20.key;
+        transfer.fromAddress = account;
+        transfer.toParachainId = extra.interior.x2[0].parachain.toString();
+        transfer.currencyId = {
+          parachaiId: amount.id.concrete.interior.x2[0].parachain,
+          assetId: amount.id.concrete.interior.x2[1].generalKey,
+        };
+      }
+    });
+  }
+}
 async function decodeInboundXcmp(xcmpExtrinsicWithEvents, apiAt, transfer) {
   transfer.toParachainId = (
     await apiAt.query.parachainInfo.parachainId()
@@ -178,7 +219,7 @@ async function decodeInboundXcmp(xcmpExtrinsicWithEvents, apiAt, transfer) {
             let instructions = apiAt.registry.createType(
               "XcmVersionedXcm",
               message.data.slice(1)
-            );
+            ); //ts as any
             // choose appropriate xcm version
             let asVersion = "not found";
             for (const versionNum of ["0", "1", "2"]) {
