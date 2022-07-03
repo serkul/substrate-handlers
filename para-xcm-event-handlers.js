@@ -1,23 +1,31 @@
 fs = require("fs");
 
 const { ApiPromise, WsProvider } = require("@polkadot/api");
-const { blake2AsU8a } = require("@polkadot/util-crypto");
-const { u8aToHex } = require("@polkadot/util");
+const { blake2AsU8a, blake2AsHex } = require("@polkadot/util-crypto");
+const { u8aToHex, stringToU8a } = require("@polkadot/util");
+const { type } = require("os");
 
-// const rpcProvider = 'wss://rpc.polkadot.io';
+// const rpcProvider = "wss://rpc.polkadot.io";
 // blockNumber = 1000;
-const rpcProvider = "wss://karura.api.onfinality.io/public-ws";
-const blockNumber = 1702399;
-// const rpcProvider = 'wss://kusama-rpc.polkadot.io/';
+// const rpcProvider = "wss://karura.api.onfinality.io/public-ws";
+// const blockNumber = 1702399; //outbound
+// 1702412; //inbound
+const rpcProvider = "wss://kusama-rpc.polkadot.io/";
+const blockNumber = 12034825;
 // const rpcProvider = "wss://moonriver.api.onfinality.io/public-ws";
 // const rpcProvider = "wss://moonriver.public.blastapi.io";
-// const blockNumber = 1655170;
+// const blockNumber = 1655240;
+// 1652961; // (outbound)
+// 1655170; //(inbound)
+// const rpcProvider = "wss://basilisk.api.onfinality.io/public-ws";
+// const blockNumber = 1400000;
 
 const chainIDs = {
   Karura: "2000",
+  Moonriver: "2023",
 };
 // We must wrap everything up in an async block
-(async () => {
+async function main() {
   // Connect to a node (this is ak public one)
   const provider = new WsProvider(rpcProvider);
   const api = await ApiPromise.create({ provider });
@@ -27,33 +35,29 @@ const chainIDs = {
   // Print out the chain to which we connected.
   console.log(`You are connected to ${chain} !`);
   //   //Store chain methadata and its version in a file
-  //   logChainMethadata(api);
+  // logChainMethadata(api);
 
   // Get block hash
   const blockHash = await api.rpc.chain.getBlockHash(blockNumber);
   // Get block by hash
   const signedBlock = await api.rpc.chain.getBlock(blockHash);
 
-  // Queries at specific hash
   // Get a decorated api instance at a specific block
-  // const now = await apiAt.query.timestamp.now();
-  // console.log(now.toHuman());
   const apiAt = await api.at(signedBlock.block.header.hash);
 
   const allBlockEvents = await apiAt.query.system.events();
   const allBlockExtrinsics = signedBlock.block.extrinsics;
 
-  console.log();
-
   transfer = {
     // id: ID! #id is a required field
-    blockNumber: "",
+    blockNumber: blockNumber,
     timestamp: "",
     fromAddress: "",
     fromParachainId: "",
     toAddress: "",
     toParachainId: "",
-    currencyId: "",
+    assetParachainId: "",
+    assetId: "",
     amount: "",
     xcmpMessageStatus: "", //change to union for threes statuses: sent, received, notfound
     xcmpMessageHash: "",
@@ -71,22 +75,28 @@ const chainIDs = {
   } else {
     transfer.xcmpMessageStatus = xcmpExtrinsicsWithEvents[0].status;
     transfer.xcmpMessageHash = xcmpExtrinsicsWithEvents[0].hash;
+
+    switch (xcmpExtrinsicsWithEvents[0].status) {
+      case "received":
+        await decodeInboundXcmp(xcmpExtrinsicsWithEvents[0], apiAt, transfer);
+        break;
+      case "sent":
+        await decodeOutboundXcmp(
+          xcmpExtrinsicsWithEvents[0],
+          apiAt,
+          chainIDs,
+          transfer
+        );
+        break;
+    }
+    // console.log(transfer);
   }
 
-  switch (xcmpExtrinsicsWithEvents[0].status) {
-    case "received":
-      await decodeInboundXcmp(xcmpExtrinsicsWithEvents[0], apiAt, transfer);
-      break;
-    case "sent":
-      await decodeOutboundXcmp(
-        xcmpExtrinsicsWithEvents[0],
-        apiAt,
-        chainIDs,
-        transfer
-      );
-      break;
-  }
-  console.log(transfer);
+  // console.log(await api.registry.getChainProperties());
+  // console.log(api.registry.chainDecimals);
+  // console.log(api.registry.chainSS58);
+  // console.log(api.registry.chainTokens);
+  console.log(api.registry.methods.toHuman());
 
   // console.log(
   //   xcmpExtrinsicsWithEvents[0].events.map(
@@ -115,8 +125,11 @@ const chainIDs = {
   // });
 
   // Exit the process.
-  process.exit();
-})();
+}
+
+main()
+  .catch(console.error)
+  .finally(() => process.exit());
 
 function logChainMethadata(api) {
   const runtimeVersion = api.runtimeVersion;
@@ -184,24 +197,47 @@ async function decodeOutboundXcmp(
   transfer.fromParachainId = (
     await apiAt.query.parachainInfo.parachainId()
   ).toString();
-  if (transfer.fromParachainId === chainIDs.Karura) {
-    xcmpExtrinsicWithEvents.events.forEach(({ event }) => {
-      if (
-        event.section == "xTokens" &&
-        event.method == "TransferredMultiAssets"
-      ) {
-        const [account, otherReserve, amount, extra] = event.data.toJSON(); //ts as any
-        // console.log(extra.interior.x2[1].accountKey20.key);
-        transfer.amount = amount.fun.fungible;
-        transfer.toAddress = extra.interior.x2[1].accountKey20.key;
-        transfer.fromAddress = account;
-        transfer.toParachainId = extra.interior.x2[0].parachain.toString();
-        transfer.currencyId = {
-          parachaiId: amount.id.concrete.interior.x2[0].parachain,
-          assetId: amount.id.concrete.interior.x2[1].generalKey,
-        };
-      }
-    });
+  switch (transfer.fromParachainId) {
+    case chainIDs.Karura:
+      xcmpExtrinsicWithEvents.events.forEach(({ event }) => {
+        if (
+          event.section == "xTokens" &&
+          event.method == "TransferredMultiAssets"
+        ) {
+          const [account, otherReserve, amount, extra] = event.data.toJSON(); //ts as any
+          // console.log(extra.interior.x2[1].accountKey20.key);
+          transfer.amount = amount.fun.fungible.toString();
+          transfer.toAddress = extra.interior.x2[1].accountKey20.key;
+          transfer.fromAddress = account;
+          transfer.toParachainId = extra.interior.x2[0].parachain.toString();
+          transfer.assetParachainId =
+            amount.id.concrete.interior.x2[0].parachain.toString();
+          transfer.assetId = amount.id.concrete.interior.x2[1].generalKey;
+        }
+      });
+      break;
+    case chainIDs.Moonriver:
+      xcmpExtrinsicWithEvents.events.forEach(({ event }) => {
+        if (event.section == "xTokens" && event.method == "Transferred") {
+          const [account, otherReserve, amount, extra] = event.data.toJSON(); //ts as any
+          transfer.amount = amount.toString();
+          transfer.toAddress = extra.interior.x2[1].accountId32.id;
+          transfer.fromAddress = account;
+          transfer.toParachainId = extra.interior.x2[0].parachain;
+          transfer.assetParachainId = "NA";
+          // console.log(otherReserve.selfReserve.toString());
+          if (otherReserve.otherReserve) {
+            transfer.assetId = otherReserve.otherReserve.toString();
+          } else {
+            transfer.assetId = "null";
+          }
+        }
+      });
+      break;
+    default:
+      transfer.warnings +=
+        " - decodeOutboundXcmp format is not known for parachain: " +
+        transfer.fromParachainId;
   }
 }
 async function decodeInboundXcmp(xcmpExtrinsicWithEvents, apiAt, transfer) {
@@ -212,7 +248,13 @@ async function decodeInboundXcmp(xcmpExtrinsicWithEvents, apiAt, transfer) {
     (paraMessage, paraId) => {
       if (paraMessage.length >= 1) {
         paraMessage.forEach((message) => {
-          const messageHash = u8aToHex(blake2AsU8a(message.data.slice(1)));
+          // const messageHash = u8aToHex(
+          //   blake2AsU8a(message.data.slice(1))
+          // );
+          const messageHash = blake2AsHex(
+            Uint8Array.from(message.data).slice(1)
+          );
+
           if (messageHash == transfer.xcmpMessageHash) {
             transfer.fromParachainId = paraId.toString();
             // let instructions = api.createType(
@@ -231,26 +273,50 @@ async function decodeInboundXcmp(xcmpExtrinsicWithEvents, apiAt, transfer) {
               transfer.warnings += " - xcmp version not found";
             }
             instructions[asVersion].forEach((instruction) => {
-              if (instruction.isReserveAssetDeposited) {
-                transfer.amount =
-                  instruction.toHuman().ReserveAssetDeposited[0].fun.Fungible;
-                transfer.currencyId = {
-                  parachainId:
-                    instruction.toHuman().ReserveAssetDeposited[0].id.Concrete
-                      .interior.X2[0].Parachain,
-                  assetId:
-                    instruction.toHuman().ReserveAssetDeposited[0].id.Concrete
-                      .interior.X2[1].GeneralKey,
-                };
-              }
-              // if (instruction.isBuyExecution) { //contains weight limit and asset ID
-              //   console.log(
-              //     instruction.toHuman().BuyExecution.fees.id.Concrete.interior.X2
-              //   );
-              // }
-              if (instruction.isDepositAsset) {
-                transfer.toAddress =
-                  instruction.toHuman().DepositAsset.beneficiary.interior.X1.AccountKey20.key;
+              switch (transfer.toParachainId) {
+                case chainIDs.Moonriver:
+                  if (instruction.isReserveAssetDeposited) {
+                    transfer.amount = instruction
+                      .toHuman()
+                      .ReserveAssetDeposited[0].fun.Fungible.toString();
+                    transfer.assetParachainId = instruction
+                      .toHuman()
+                      .ReserveAssetDeposited[0].id.Concrete.interior.X2[0].Parachain.toString();
+                    transfer.assetId =
+                      instruction.toHuman().ReserveAssetDeposited[0].id.Concrete.interior.X2[1].GeneralKey;
+                  }
+                  // if (instruction.isBuyExecution) { //contains weight limit and asset ID
+                  //   console.log(
+                  //     instruction.toHuman().BuyExecution.fees.id.Concrete.interior.X2
+                  //   );
+                  // }
+                  if (instruction.isDepositAsset) {
+                    transfer.toAddress =
+                      instruction.toHuman().DepositAsset.beneficiary.interior.X1.AccountKey20.key;
+                  }
+                  break;
+                case chainIDs.Karura:
+                  // console.log(instruction.toHuman());
+                  if (instruction.isWithdrawAsset) {
+                    transfer.amount = instruction
+                      .toHuman()
+                      .WithdrawAsset[0].fun.Fungible.toString();
+                    transfer.assetParachainId = "NA";
+                    transfer.assetId =
+                      instruction.toHuman().WithdrawAsset[0].id.Concrete.interior.X1.GeneralKey;
+                  }
+                  // // if (instruction.isBuyExecution) { //contains weight limit and asset ID
+                  // // }
+                  if (instruction.isDepositAsset) {
+                    transfer.toAddress =
+                      instruction.toHuman().DepositAsset.beneficiary.interior.X1.AccountId32.id;
+                  }
+
+                  break;
+                default:
+                  transfer.warnings +=
+                    " - decodeInboundXcmp format is not known for parachain: " +
+                    transfer.fromParachainId;
               }
             });
           }
