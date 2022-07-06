@@ -2,7 +2,7 @@ fs = require("fs");
 
 const { ApiPromise, WsProvider } = require("@polkadot/api");
 const { blake2AsU8a, blake2AsHex } = require("@polkadot/util-crypto");
-const { u8aToHex, stringToU8a } = require("@polkadot/util");
+const { u8aToHex, stringToU8a, stringToHex } = require("@polkadot/util");
 const { type } = require("os");
 
 // const rpcProvider = "wss://rpc.polkadot.io";
@@ -10,13 +10,13 @@ const { type } = require("os");
 // const rpcProvider = "wss://karura.api.onfinality.io/public-ws";
 // const blockNumber = 1702399; //outbound
 // 1702412; //inbound
-const rpcProvider = "wss://kusama-rpc.polkadot.io/";
-const blockNumber = 12034825;
+// const rpcProvider = "wss://kusama-rpc.polkadot.io/";
+// const blockNumber = 12034825;
 // const rpcProvider = "wss://moonriver.api.onfinality.io/public-ws";
-// const rpcProvider = "wss://moonriver.public.blastapi.io";
-// const blockNumber = 1655240;
-// 1652961; // (outbound)
-// 1655170; //(inbound)
+const rpcProvider = "wss://moonriver.public.blastapi.io";
+const blockNumber = //1655240;
+  // 1652961; // (outbound)
+  1655170; //(inbound)
 // const rpcProvider = "wss://basilisk.api.onfinality.io/public-ws";
 // const blockNumber = 1400000;
 
@@ -89,14 +89,14 @@ async function main() {
         );
         break;
     }
-    // console.log(transfer);
+    console.log(transfer);
   }
 
   // console.log(await api.registry.getChainProperties());
   // console.log(api.registry.chainDecimals);
   // console.log(api.registry.chainSS58);
   // console.log(api.registry.chainTokens);
-  console.log(api.registry.methods.toHuman());
+  // console.log(api.call.parachainHost.dmqContents);
 
   // console.log(
   //   xcmpExtrinsicsWithEvents[0].events.map(
@@ -254,7 +254,6 @@ async function decodeInboundXcmp(xcmpExtrinsicWithEvents, apiAt, transfer) {
           const messageHash = blake2AsHex(
             Uint8Array.from(message.data).slice(1)
           );
-
           if (messageHash == transfer.xcmpMessageHash) {
             transfer.fromParachainId = paraId.toString();
             // let instructions = api.createType(
@@ -262,6 +261,7 @@ async function decodeInboundXcmp(xcmpExtrinsicWithEvents, apiAt, transfer) {
               "XcmVersionedXcm",
               message.data.slice(1)
             ); //ts as any
+
             // choose appropriate xcm version
             let asVersion = "not found";
             for (const versionNum of ["0", "1", "2"]) {
@@ -272,10 +272,18 @@ async function decodeInboundXcmp(xcmpExtrinsicWithEvents, apiAt, transfer) {
             if (asVersion === "not found") {
               transfer.warnings += " - xcmp version not found";
             }
+
             instructions[asVersion].forEach((instruction) => {
               switch (transfer.toParachainId) {
                 case chainIDs.Moonriver:
                   if (instruction.isReserveAssetDeposited) {
+                    console.log(
+                      JSON.stringify(
+                        instruction.toHuman().ReserveAssetDeposited,
+                        undefined,
+                        2
+                      )
+                    );
                     transfer.amount = instruction
                       .toHuman()
                       .ReserveAssetDeposited[0].fun.Fungible.toString();
