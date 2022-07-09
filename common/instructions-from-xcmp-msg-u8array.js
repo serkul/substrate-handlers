@@ -15,10 +15,11 @@ function intrustionsFromXcmU8Array(messageData, apiAt) {
   } else {
     // Push readable instruction in an array
     let instructionsHuman = [];
-    // V1 sends all instructions in one object
+    // Store as which version message is decoded as first ellement
+    instructionsHuman.push("xcmp_" + asVersion);
+    // V1 sends all instructions in one object, needed for parceXcmpInstructions function
     if (asVersion == "asV1") {
-      // Add version name, needed for parceXcmpInstructions function
-      instructionsHuman.push("xcmpVersion1");
+      // xcmpVersion1 has all instructions in one object
       instructionsHuman.push(instructions.asV1.toHuman());
     } else {
       instructions[asVersion].forEach((instruction) => {

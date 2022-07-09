@@ -21,9 +21,9 @@ const chainPrefixList = {
 };
 
 const rpcProvider = "wss://kusama-rpc.polkadot.io/";
-const blockNumber = 12034879; //ump
+// const blockNumber = 12034879; //ump
 // const blockNumber = 12034825; //dmp
-// const blockNumber = 12265870; //xcmp loss to sovereign
+const blockNumber = 12265870; //xcmp loss to sovereign
 // const rpcProvider = "wss://rpc.polkadot.io";
 // blockNumber = 1000;
 
@@ -53,8 +53,8 @@ const blockNumber = 12034879; //ump
     toParachainId: "",
 
     assetParachainId: "",
-    assetId: "",
-    amount: "",
+    assetId: [],
+    amount: [],
     multiAssetJSON: "",
 
     xcmpMessageStatus: "", //change to union for threes statuses: sent, received, notfound
@@ -67,7 +67,7 @@ const blockNumber = 12034879; //ump
     warnings: "",
   };
 
-  await decodeRelayUMP(api, blockNumber, transfer);
+  // await decodeRelayUMP(api, blockNumber, transfer);
   // await decodeRelayDMP(api, blockNumber, transfer);
   delete transfer["xcmpInstructions"];
   console.log(transfer);
@@ -128,10 +128,6 @@ async function decodeRelayDMP(api, blockNumber, transfer) {
         fee_asset_item: feeAsset,
         weight_limit: weightLimit,
       } = extrinsic.toHuman().method.args; //ts as any
-      console.log(
-        Number(dest.V1.interior.X1.Parachain.replace(/,/g, "")),
-        typeof dest.V1.interior.X1.Parachain
-      );
       transfer.toParachainId = dest.V1.interior.X1.Parachain.toString();
       transfer.toAddress =
         beneficiary.V1.interior.X1.AccountKey20.key.toString();
@@ -149,7 +145,6 @@ async function decodeRelayDMP(api, blockNumber, transfer) {
   );
   depositEvents.forEach(({ event }) => {
     if (event.toHuman().data.amount === transfer.amount) {
-      console.log(event.data.amount.toHuman());
       // console.log(u8aToHex(decodeAddress(ev.toHuman().event.data.who)));
       transfer.fromAddress = u8aToHex(event.data.who);
     }
@@ -203,7 +198,6 @@ async function decodeRelayUMP(api, blockNumber, transfer) {
               (message) => message.length > 0
             );
           notEmptyUpwardMessages.forEach((message) => {
-            // console.log(message.toU8a());
             const messageHash = blake2AsHex(Uint8Array.from(message));
             if (messageHash == transfer.xcmpMessageHash) {
               transfer.fromParachainId = fromParaId;

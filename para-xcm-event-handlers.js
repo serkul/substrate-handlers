@@ -21,8 +21,8 @@ const rpcProvider = "wss://moonriver.public.blastapi.io";
 const blockNumber = //1655240;
   // 1652961; // (outbound)
   // 1655170; //(inbound)
-  // 1655874; //dmp
-  1655886; //ump
+  1655874; //dmp
+// 1655886; //ump
 // const rpcProvider = "wss://basilisk.api.onfinality.io/public-ws";
 // const blockNumber = 1400000;
 
@@ -71,20 +71,20 @@ async function main() {
   };
 
   // const dmpQuery = await apiAt.query.dmp.downwardMessageQueues(2023);
-  // await handleDmpParaEvent(
-  //   apiAt,
-  //   allBlockEvents,
-  //   allBlockExtrinsics,
-  //   chainIDs,
-  //   transfer
-  // );
-  await handleUmpParaEvent(
+  await handleDmpParaEvent(
     apiAt,
     allBlockEvents,
     allBlockExtrinsics,
     chainIDs,
     transfer
   );
+  // await handleUmpParaEvent(
+  //   apiAt,
+  //   allBlockEvents,
+  //   allBlockExtrinsics,
+  //   chainIDs,
+  //   transfer
+  // );
 
   console.log(transfer);
 
