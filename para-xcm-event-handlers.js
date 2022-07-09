@@ -4,6 +4,10 @@ const { ApiPromise, WsProvider } = require("@polkadot/api");
 const { blake2AsU8a, blake2AsHex } = require("@polkadot/util-crypto");
 const { u8aToHex, stringToU8a, stringToHex } = require("@polkadot/util");
 const { type } = require("os");
+const {
+  intrustionsFromXcmU8Array,
+} = require("./common/instructions-from-xcmp-msg-u8array");
+const { parceXcmpInstrustions } = require("./common/parce-xcmp-instructions");
 
 // const rpcProvider = "wss://rpc.polkadot.io";
 // blockNumber = 1000;
@@ -16,7 +20,9 @@ const { type } = require("os");
 const rpcProvider = "wss://moonriver.public.blastapi.io";
 const blockNumber = //1655240;
   // 1652961; // (outbound)
-  1655170; //(inbound)
+  // 1655170; //(inbound)
+  // 1655874; //dmp
+  1655886; //ump
 // const rpcProvider = "wss://basilisk.api.onfinality.io/public-ws";
 // const blockNumber = 1400000;
 
@@ -57,12 +63,30 @@ async function main() {
     toAddress: "",
     toParachainId: "",
     assetParachainId: "",
-    assetId: "",
-    amount: "",
+    assetId: [],
+    amount: [],
     xcmpMessageStatus: "", //change to union for threes statuses: sent, received, notfound
     xcmpMessageHash: "",
     warnings: "",
   };
+
+  // const dmpQuery = await apiAt.query.dmp.downwardMessageQueues(2023);
+  // await handleDmpParaEvent(
+  //   apiAt,
+  //   allBlockEvents,
+  //   allBlockExtrinsics,
+  //   chainIDs,
+  //   transfer
+  // );
+  await handleUmpParaEvent(
+    apiAt,
+    allBlockEvents,
+    allBlockExtrinsics,
+    chainIDs,
+    transfer
+  );
+
+  console.log(transfer);
 
   const xcmpExtrinsicsWithEvents = mapXcmpEventsToExtrinsics(
     allBlockExtrinsics,
@@ -98,11 +122,6 @@ async function main() {
   // console.log(api.registry.chainTokens);
   // console.log(api.call.parachainHost.dmqContents);
 
-  // console.log(
-  //   xcmpExtrinsicsWithEvents[0].events.map(
-  //     ({ event }) => `${event.section}.${event.method}`
-  //   )
-  // );
   // xcmExtrinsicsWithEvents[0].events.forEach(({ event }) => {
   //   if (event.section == "xTokens" && event.method == "Transferred") {
   //     const types = event.typeDef;
@@ -186,6 +205,67 @@ function mapXcmpEventsToExtrinsics(allBlockExtrinsics, allBlockEvents) {
     });
   });
   return xcmpExtrinsicsWithEvents;
+}
+
+async function handleDmpParaEvent(
+  apiAt,
+  allBlockEvents,
+  allBlockExtrinsics,
+  chainIDs,
+  transfer
+) {
+  const dmpParaEvent = allBlockEvents.filter(
+    ({ event }) =>
+      event.section == "dmpQueue" && event.method == "ExecutedDownward"
+  )[0];
+  transfer.xcmpMessageHash = dmpParaEvent.event.data[0].toString(); //subql gives event directly, no phase?
+  const dmpParaExtrinsic = allBlockExtrinsics.filter(
+    ({ method }) =>
+      method.section == "parachainSystem" &&
+      method.method == "setValidationData"
+  )[0];
+  dmpParaExtrinsic.method.args[0].downwardMessages.forEach(
+    ({ sentAt, msg }) => {
+      const messageHash = blake2AsHex(Uint8Array.from(msg));
+      if (messageHash == transfer.xcmpMessageHash) {
+        const instructions = intrustionsFromXcmU8Array(msg, apiAt);
+        if (typeof instructions == "string") {
+          transfer.warnings += instructions;
+        } else {
+          parceXcmpInstrustions(instructions, transfer);
+        }
+      }
+    }
+  );
+
+  // allBlockExtrinsics.forEach((el) => console.log(el.toHuman()));
+}
+
+async function handleUmpParaEvent(
+  apiAt,
+  allBlockEvents,
+  allBlockExtrinsics,
+  chainIDs,
+  transfer
+) {
+  const umpParaEvent = allBlockEvents.filter(
+    ({ event }) => event.section == "xTokens" && event.method == "Transferred"
+  )[0];
+  // console.log(umpParaEvent.toHuman());
+  const { sender, currencyId, amount, dest } =
+    umpParaEvent.event.data.toHuman();
+  // console.log(sender, currencyId, amount, dest);
+  transfer.fromAddress = sender;
+  transfer.assetId = currencyId.OtherReserve;
+  transfer.amount = amount.replace(/,/g, "");
+  transfer.toParachainId = dest.parents;
+  transfer.toAddress = dest.interior.X1.AccountId32.id;
+  transfer.xcmpStatus = "ump sent";
+  // calculate "custom" hash for UMP due to lack ot the "real" one
+  // as well as the byte representation of XCMP message
+  transfer.xcmpMessageHash = blake2AsHex(
+    Uint8Array.from(amount + JSON.stringify(dest.interior, undefined))
+  );
 }
 
 async function decodeOutboundXcmp(
@@ -277,13 +357,6 @@ async function decodeInboundXcmp(xcmpExtrinsicWithEvents, apiAt, transfer) {
               switch (transfer.toParachainId) {
                 case chainIDs.Moonriver:
                   if (instruction.isReserveAssetDeposited) {
-                    console.log(
-                      JSON.stringify(
-                        instruction.toHuman().ReserveAssetDeposited,
-                        undefined,
-                        2
-                      )
-                    );
                     transfer.amount = instruction
                       .toHuman()
                       .ReserveAssetDeposited[0].fun.Fungible.toString();

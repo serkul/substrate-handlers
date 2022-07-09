@@ -7,13 +7,23 @@ const {
 } = require("@polkadot/util-crypto");
 const { u8aToHex, stringToU8a } = require("@polkadot/util");
 const {
-  intrustionsFromBytesXCMP,
-} = require("./common/instructions-from-bytes-xcmp");
+  intrustionsFromXcmU8Array,
+} = require("./common/instructions-from-xcmp-msg-u8array");
+const { parceXcmpInstrustions } = require("./common/parce-xcmp-instructions");
+
+const chainPrefixList = {
+  polkadot: 0,
+  kusama: 2,
+  karura: 8,
+  moonriver: 1285,
+  basilisk: 10041,
+  kintsugi: 2092,
+};
 
 const rpcProvider = "wss://kusama-rpc.polkadot.io/";
 const blockNumber = 12034879; //ump
 // const blockNumber = 12034825; //dmp
-
+// const blockNumber = 12265870; //xcmp loss to sovereign
 // const rpcProvider = "wss://rpc.polkadot.io";
 // blockNumber = 1000;
 
@@ -57,21 +67,40 @@ const blockNumber = 12034879; //ump
     warnings: "",
   };
 
-  // await decodeRelayUMP(api, blockNumber, transfer);
+  await decodeRelayUMP(api, blockNumber, transfer);
   // await decodeRelayDMP(api, blockNumber, transfer);
   delete transfer["xcmpInstructions"];
-  // console.log(transfer);
+  console.log(transfer);
 
-  console.log(calcSovereignAddress(api, "2000", "para", 2));
-  console.log(
-    u8aToHex(
-      decodeAddress(
-        "a3d4zPpCqjQLhdrvRZpHHmZcBizveD1PUuboSdnWyRZbhm59p",
-        false,
-        2092
-      )
-    )
-  );
+  // console.log(
+  //   "moonriver sibl",
+  //   calcSovereignAddress(api, "2023", "sibl", chainPrefixList.karura)
+  // );
+  // console.log(
+  //   "karura sibl",
+  //   calcSovereignAddress(api, "2000", "sibl", chainPrefixList.karura)
+  // );
+  // console.log(
+  //   encodeAddress(
+  //     u8aToHex(
+  //       Uint8Array.from([
+  //         ...new TextEncoder().encode("sibl"),
+  //         ...api.createType("ParaId", "2000").toU8a(),
+  //       ])
+  //     ).padEnd(66, "0"),
+  //     chainPrefixList.kintsugi
+  //   )
+  // );
+
+  // console.log(
+  //   u8aToHex(
+  //     decodeAddress(
+  //       "a3d4zPpCqjQLhdrvRZpHHmZcBizveD1PUuboSdnWyRZbhm59p",
+  //       false,
+  //       2092
+  //     )
+  //   )
+  // );
   process.exit();
 })();
 
@@ -83,6 +112,10 @@ async function decodeRelayDMP(api, blockNumber, transfer) {
   // Get a decorated api instance at a specific block
   const apiAt = await api.at(signedBlock.block.header.hash);
   const allBlockExtrinsics = signedBlock.block.extrinsics;
+
+  const dmpQuery = await apiAt.query.dmp.downwardMessageQueues(2023);
+  // console.log(blake2AsHex(Uint8Array.from(dmpQuery[0].msg)));
+
   allBlockExtrinsics.forEach((extrinsic) => {
     if (
       extrinsic.method.section == "xcmPallet" &&
@@ -95,6 +128,10 @@ async function decodeRelayDMP(api, blockNumber, transfer) {
         fee_asset_item: feeAsset,
         weight_limit: weightLimit,
       } = extrinsic.toHuman().method.args; //ts as any
+      console.log(
+        Number(dest.V1.interior.X1.Parachain.replace(/,/g, "")),
+        typeof dest.V1.interior.X1.Parachain
+      );
       transfer.toParachainId = dest.V1.interior.X1.Parachain.toString();
       transfer.toAddress =
         beneficiary.V1.interior.X1.AccountKey20.key.toString();
@@ -104,26 +141,18 @@ async function decodeRelayDMP(api, blockNumber, transfer) {
       transfer.feeLimit = weightLimit.Limited.toString();
     }
   });
-}
 
-function parceRelayUMP(instructions, transfer) {
-  instructions.forEach((instruction) => {
-    Object.keys(instruction).forEach((key) => {
-      switch (key) {
-        case "WithdrawAsset":
-          transfer.amount =
-            instruction.WithdrawAsset[0].fun.Fungible.toString();
-          transfer.assetId = JSON.stringify(instruction.WithdrawAsset[0].id);
-          break;
-        case "BuyExecution":
-          transfer.fees = JSON.stringify(instruction.BuyExecution);
-          break;
-        case "DepositAsset":
-          transfer.toAddress =
-            instruction.DepositAsset.beneficiary.interior.X1.AccountId32.id;
-          break;
-      }
-    });
+  // play with balance deposite/withdraw balances.Withdraw
+  const allBlockEvents = await apiAt.query.system.events();
+  const depositEvents = allBlockEvents.filter(
+    (el) => el.event.section == "balances" && el.event.method == "Withdraw"
+  );
+  depositEvents.forEach(({ event }) => {
+    if (event.toHuman().data.amount === transfer.amount) {
+      console.log(event.data.amount.toHuman());
+      // console.log(u8aToHex(decodeAddress(ev.toHuman().event.data.who)));
+      transfer.fromAddress = u8aToHex(event.data.who);
+    }
   });
 }
 
@@ -157,7 +186,6 @@ async function decodeRelayUMP(api, blockNumber, transfer) {
     console.log("more tnan one ump.ExecutedUpward event");
   } else {
     transfer.xcmpMessageHash = upmsExecutedUpward[0].toHuman().event.data[0];
-
     const allUmpInfoBlockExtrinsics =
       umpInfoblockHashsignedBlock.block.extrinsics;
 
@@ -169,25 +197,46 @@ async function decodeRelayUMP(api, blockNumber, transfer) {
         extrinsic.method.args[0].backedCandidates.forEach((candidate) => {
           const fromParaId = candidate.candidate.descriptor.paraId.toString();
           // Check upward messages (from parachain to relay chain)
-          candidate.candidate.commitments.upwardMessages.forEach((message) => {
+
+          const notEmptyUpwardMessages =
+            candidate.candidate.commitments.upwardMessages.filter(
+              (message) => message.length > 0
+            );
+          notEmptyUpwardMessages.forEach((message) => {
+            // console.log(message.toU8a());
             const messageHash = blake2AsHex(Uint8Array.from(message));
             if (messageHash == transfer.xcmpMessageHash) {
               transfer.fromParachainId = fromParaId;
-
-              const instructionsHuman = intrustionsFromBytesXCMP(
+              const instructionsHuman = intrustionsFromXcmU8Array(
                 message,
                 apiAt
               );
-              console.log(instructionsHuman);
+
+              // calculate "custom" UMP hash, since parachain side
+              // doesn't knows the "real" XCMP hash
+              let hashStr = "";
+              instructionsHuman.forEach((inst) => {
+                if (Object.keys(inst) == "WithdrawAsset")
+                  hashStr += inst.WithdrawAsset[0].fun.Fungible;
+                if (Object.keys(inst) == "DepositAsset")
+                  hashStr += JSON.stringify(
+                    inst.DepositAsset.beneficiary.interior,
+                    undefined
+                  );
+              });
+              const customUpmHash = blake2AsHex(Uint8Array.from(hashStr));
+              transfer.xcmpMessageHash = customUpmHash;
+
               if (typeof instructionsHuman == "string") {
                 transfer.warnings += instructionsHuman;
               } else {
-                console.log("tut");
-
+                // safe all instruction as array of JSON objects, if things
+                // don't parce correctly, the user still can check the original
+                // instructions
                 transfer.xcmpInstructions = instructionsHuman.map(
-                  (instruction) => JSON.stringify(instruction, undefined, 2)
+                  (instruction) => JSON.stringify(instruction, undefined)
                 );
-                parceRelayUMP(instructionsHuman, transfer);
+                parceXcmpInstrustions(instructionsHuman, transfer);
               }
             }
           });
@@ -208,3 +257,52 @@ function calcSovereignAddress(api, parachainId, paraOrSibl, prefix) {
     prefix
   );
 }
+
+//registry
+[
+  ({
+    prefix: 0,
+    network: "polkadot",
+    displayName: "Polkadot Relay Chain",
+    symbols: ["DOT"],
+    decimals: [10],
+    standardAccount: "*25519",
+    website: "https://polkadot.network",
+  },
+  {
+    prefix: 2,
+    network: "kusama",
+    displayName: "Kusama Relay Chain",
+    symbols: ["KSM"],
+    decimals: [12],
+    standardAccount: "*25519",
+    website: "https://kusama.network",
+  },
+  {
+    prefix: 8,
+    network: "karura",
+    displayName: "Karura",
+    symbols: ["KAR"],
+    decimals: [12],
+    standardAccount: "*25519",
+    website: "https://karura.network/",
+  },
+  {
+    prefix: 10041,
+    network: "basilisk",
+    displayName: "Basilisk",
+    symbols: ["BSX"],
+    decimals: [12],
+    standardAccount: "*25519",
+    website: "https://bsx.fi",
+  },
+  {
+    prefix: 1285,
+    network: "moonriver",
+    displayName: "Moonriver",
+    symbols: ["MOVR"],
+    decimals: [18],
+    standardAccount: "secp256k1",
+    website: "https://moonbeam.network",
+  }),
+];
